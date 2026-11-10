@@ -22,17 +22,8 @@ jobs:
     with:
       version: nightly
 
-  # The same client as a page, packaged so it can be hosted without being
-  # built. It is a separate workflow rather than a fourth matrix entry because
-  # nothing about it matches: a shared-memory target, a rebuilt standard library,
-  # trunk, and one artifact rather than one per platform.
-  web:
-    uses: ./.github/workflows/web-bundle.yml
-    with:
-      version: nightly
-
   publish:
-    needs: [build, web]
+    needs: [build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -50,10 +41,10 @@ jobs:
           set -euo pipefail
           (cd artifacts && sha256sum oxidezap-* > checksums.sha256)
           cat > notes.md <<'NOTES'
-          Unsigned development build of `main`. Expect breakage.
+          Unsigned Linux x86_64 (Wayland / X11) development build of `main`.
 
-          Download the archive for your platform and unpack it. It holds three
-          binaries that belong together, and they must stay in the same
+          Download `oxidezap-nightly-linux-x86_64.tar.gz` and unpack it. It holds
+          three binaries that belong together, and they must stay in the same
           directory:
 
           - `oxidezap` is the window.
@@ -62,21 +53,8 @@ jobs:
           - `oxidezap-cli` is the scriptable front end onto that same daemon,
             for use from a terminal or a script.
 
-          The tarballs carry the execute bit. On macOS, clear the quarantine
-          flag before the first run:
-
-              xattr -dr com.apple.quarantine oxidezap oxidezapd oxidezap-cli
-
-          On Windows, SmartScreen will object. All of this follows from the
-          binaries being unsigned.
-
-          `oxidezap-nightly-web.zip` is the same client as a web page: the
-          bundle published to GitHub Pages, built to be served from anywhere
-          rather than from one directory. Unpack it and serve the files with
-          any static web server — over HTTPS or from `localhost`, and with
-          `coi-serviceworker.js` left beside `index.html`, which is what
-          obtains the cross-origin isolation the window needs. `README.md`
-          inside says the rest.
+          Run `./install-desktop.sh` from the unpacked directory to register a
+          `.desktop` launcher and icon in `~/.local/share/`.
           NOTES
           echo "" >> notes.md
           echo "Built from [\`${GITHUB_SHA:0:7}\`](https://github.com/$GH_REPO/commit/$GITHUB_SHA) on $(date -u +"%Y-%m-%d %H:%M") UTC." >> notes.md

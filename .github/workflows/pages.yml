@@ -41,12 +41,6 @@
 name: Pages
 
 on:
-  push:
-    branches: ["main"]
-  # Buildable and previewable from a pull request: the build is the part that
-  # breaks, and finding out at merge time is finding out late.
-  pull_request:
-    types: [opened, synchronize, reopened, closed, ready_for_review, converted_to_draft]
   workflow_dispatch:
 
 permissions:
