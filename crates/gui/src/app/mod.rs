@@ -1077,6 +1077,14 @@ pub struct WhatsAppApp {
     pub(crate) avatar_manager: crate::session::avatar::AvatarManager,
     /// Cached fingerprint of the visible row range and avatar state to avoid redundant work.
     last_avatar_window_fingerprint: Option<u64>,
+    /// Active privacy policy for this account, synchronized with the daemon.
+    pub(crate) privacy: oxidezap_core::PrivacyPolicy,
+    /// Remaining safety-delay seconds per chat JID before auto-confirming read receipts.
+    pub(crate) safety_delay_remaining: HashMap<String, u8>,
+    /// Active 1Hz safety-delay countdown tasks per chat JID.
+    safety_delay_tasks: HashMap<String, Task<()>>,
+    /// Chats whose safety-delay countdown was explicitly cancelled for the current unread batch.
+    pub(crate) cancelled_auto_reads: HashSet<String>,
 }
 
 /// Store-backed conversation and attention facts delivered with a message.
@@ -1307,6 +1315,9 @@ impl WhatsAppApp {
                     // both correct and no more work than merging.
                     FromDaemon::Plugins(plugins) => entity.update(cx, |app, cx| {
                         app.adopt_plugins(plugins, cx);
+                    }),
+                    FromDaemon::Privacy(policy) => entity.update(cx, |app, cx| {
+                        app.adopt_privacy_policy(policy, cx);
                     }),
                     // Announced on connect, before this window existed, so it
                     // arrives with the snapshot rather than as an event.
@@ -1565,6 +1576,10 @@ impl WhatsAppApp {
             heartbeat: None,
             avatar_manager: crate::session::avatar::AvatarManager::new(),
             last_avatar_window_fingerprint: None,
+            privacy: oxidezap_core::PrivacyPolicy::default(),
+            safety_delay_remaining: HashMap::new(),
+            safety_delay_tasks: HashMap::new(),
+            cancelled_auto_reads: HashSet::new(),
         }
     }
 
@@ -2263,13 +2278,22 @@ impl WhatsAppApp {
         ) {
             return;
         }
-        let Some(client) = self.client.as_ref() else {
-            return;
-        };
         let Some(jid) = self.visible_chat.clone() else {
             return;
         };
         let owed = self.owed_reads.contains(&jid);
+        if self.privacy.block_read_receipts {
+            if self
+                .find_chat(&jid)
+                .is_some_and(|chat| chat_read_needs_resume(chat, owed))
+            {
+                self.arm_safety_delay_if_needed(&jid, cx);
+            }
+            return;
+        }
+        let Some(client) = self.client.as_ref() else {
+            return;
+        };
         let Some(chat) = self
             .find_chat(&jid)
             .filter(|chat| chat_read_needs_resume(chat, owed))
@@ -2287,6 +2311,143 @@ impl WhatsAppApp {
         }
         self.invalidate_chat_cache();
         self.invalidate_message_cache(&jid, cx);
+    }
+
+    /// Current privacy policy for this account.
+    pub fn privacy_policy(&self) -> oxidezap_core::PrivacyPolicy {
+        self.privacy
+    }
+
+    /// Update the privacy policy and persist it in the daemon.
+    pub fn set_privacy_policy(
+        &mut self,
+        mut policy: oxidezap_core::PrivacyPolicy,
+        cx: &mut Context<Self>,
+    ) {
+        policy.safety_delay_secs = policy.clamped_safety_delay_secs();
+        self.adopt_privacy_policy(policy, cx);
+        if let Some(client) = &self.client {
+            client.set_privacy_policy(policy);
+        }
+    }
+
+    /// Apply a privacy policy received from the daemon or set locally.
+    pub(crate) fn adopt_privacy_policy(
+        &mut self,
+        policy: oxidezap_core::PrivacyPolicy,
+        cx: &mut Context<Self>,
+    ) {
+        self.privacy = policy;
+        if !policy.block_read_receipts || policy.clamped_safety_delay_secs() == 0 {
+            self.safety_delay_tasks.clear();
+            self.safety_delay_remaining.clear();
+        }
+        if !policy.block_read_receipts {
+            self.cancelled_auto_reads.clear();
+        } else if policy.clamped_safety_delay_secs() > 0 {
+            self.resume_visible_read(cx);
+        }
+        cx.notify();
+    }
+
+    /// Remaining seconds on the safety-delay timer for `jid`, if one is ticking.
+    pub fn safety_delay_for(&self, jid: &str) -> Option<u8> {
+        self.safety_delay_remaining.get(jid).copied()
+    }
+
+    /// Cancel an active safety-delay countdown for `jid` so receipts stay blocked
+    /// until manually confirmed or a new unread message arrives.
+    pub fn cancel_safety_delay(&mut self, jid: &str, cx: &mut Context<Self>) {
+        self.safety_delay_tasks.remove(jid);
+        self.safety_delay_remaining.remove(jid);
+        self.cancelled_auto_reads.insert(jid.to_string());
+        cx.notify();
+    }
+
+    /// Explicitly confirm and send read receipts for `jid` (manual button, safety
+    /// delay expiry, or auto-receipt on reply).
+    pub fn confirm_chat_read(&mut self, jid: &str, cx: &mut Context<Self>) {
+        self.confirm_chat_read_in(jid, cx);
+        cx.notify();
+    }
+
+    pub(crate) fn confirm_chat_read_in(&mut self, jid: &str, cx: &mut App) {
+        self.safety_delay_tasks.remove(jid);
+        self.safety_delay_remaining.remove(jid);
+        self.cancelled_auto_reads.remove(jid);
+        self.owed_reads.remove(jid);
+        let newest = self
+            .find_chat(jid)
+            .map(Arc::as_ref)
+            .and_then(newest_shared_message);
+        if let Some(client) = &self.client {
+            client.mark_chat_read_forced(jid, newest);
+        }
+        if let Some(chat) = self.find_chat_mut(jid) {
+            chat.mark_as_read();
+        }
+        self.invalidate_chat_cache();
+        self.invalidate_message_cache(jid, cx);
+    }
+
+    /// Arm the safety-delay countdown for `jid` when read receipts are blocked
+    /// and a positive safety delay is configured.
+    pub(crate) fn arm_safety_delay_if_needed(&mut self, jid: &str, cx: &mut Context<Self>) {
+        if !self.privacy.block_read_receipts {
+            return;
+        }
+        let delay = self.privacy.clamped_safety_delay_secs();
+        if delay == 0
+            || self.safety_delay_tasks.contains_key(jid)
+            || self.cancelled_auto_reads.contains(jid)
+        {
+            return;
+        }
+        let has_unread = self
+            .find_chat(jid)
+            .is_some_and(|chat| chat.unread_count > 0 || chat.manually_unread);
+        if !has_unread {
+            return;
+        }
+        let target = jid.to_string();
+        self.safety_delay_remaining.insert(target.clone(), delay);
+        let task_jid = target.clone();
+        let task = cx.spawn(async move |entity: WeakEntity<Self>, cx| {
+            loop {
+                crate::platform::sleep(std::time::Duration::from_secs(1)).await;
+                let keep_going = entity
+                    .update(cx, |app, cx| {
+                        let still_viewing = app.visible_chat.as_deref() == Some(task_jid.as_str())
+                            && app.window_focused
+                            && crate::platform::application_is_active()
+                            && app.privacy.block_read_receipts
+                            && app.privacy.clamped_safety_delay_secs() > 0;
+                        if !still_viewing {
+                            app.safety_delay_remaining.remove(&task_jid);
+                            app.safety_delay_tasks.remove(&task_jid);
+                            cx.notify();
+                            return false;
+                        }
+                        let Some(remaining) = app.safety_delay_remaining.get_mut(&task_jid) else {
+                            app.safety_delay_tasks.remove(&task_jid);
+                            return false;
+                        };
+                        if *remaining <= 1 {
+                            app.confirm_chat_read(&task_jid, cx);
+                            return false;
+                        }
+                        *remaining -= 1;
+                        cx.notify();
+                        true
+                    })
+                    .unwrap_or(false);
+                if !keep_going {
+                    break;
+                }
+            }
+        });
+        self.safety_delay_tasks.insert(target, task);
+        cx.notify();
     }
 
     /// Whether the chat list this frame draws has no rows in it at all.
@@ -2321,6 +2482,10 @@ impl WhatsAppApp {
         // epoch nothing had bumped, and send the old account's note from the
         // newly paired one.
         self.leave_connected_view(Some(window), cx);
+        self.privacy = oxidezap_core::PrivacyPolicy::default();
+        self.safety_delay_tasks.clear();
+        self.safety_delay_remaining.clear();
+        self.cancelled_auto_reads.clear();
         self.incoming_file_epoch = self.incoming_file_epoch.wrapping_add(1);
         self.incoming_file_reading = false;
         self.paste_preview = None;
@@ -2427,6 +2592,8 @@ impl WhatsAppApp {
     /// whose work belongs to the live connection must stop here.
     fn leave_connected_view(&mut self, window: Option<&mut Window>, cx: &mut Context<Self>) {
         self.calls.update(cx, |calls, cx| calls.silence_alerts(cx));
+        self.safety_delay_tasks.clear();
+        self.safety_delay_remaining.clear();
         // The window-scoped text selection outlives the conversation's rows.
         // Clear it with the rest of the connected view so Copy cannot expose
         // hidden message text after a disconnect, error, or logout. Account
@@ -3034,26 +3201,35 @@ impl WhatsAppApp {
                 crate::platform::application_is_active(),
                 self.client.is_some(),
             )
-            && let Some(chat) = self
+        {
+            if self.privacy.block_read_receipts {
+                if self
+                    .find_chat(&jid)
+                    .is_some_and(|c| chat_read_needs_resume(c, owed))
+                {
+                    self.arm_safety_delay_if_needed(&jid, cx);
+                }
+            } else if let Some(chat) = self
                 .find_chat(&jid)
                 .filter(|c| chat_read_needs_resume(c, owed))
-        {
-            match read_bound(chat) {
-                ReadBound::Now(newest) => {
-                    info!("Marking {} read", observe_str(&jid));
-                    if let Some(client) = self.client.as_ref() {
-                        client.mark_chat_read(&jid, newest);
-                        self.owed_reads.remove(&jid);
+            {
+                match read_bound(chat) {
+                    ReadBound::Now(newest) => {
+                        info!("Marking {} read", observe_str(&jid));
+                        if let Some(client) = self.client.as_ref() {
+                            client.mark_chat_read(&jid, newest);
+                            self.owed_reads.remove(&jid);
+                            mark_locally = true;
+                        }
+                    }
+                    ReadBound::WhenLoaded => {
+                        debug!(
+                            "holding the read for {} until its messages arrive",
+                            observe_str(&jid)
+                        );
+                        self.owed_reads.insert(jid.clone());
                         mark_locally = true;
                     }
-                }
-                ReadBound::WhenLoaded => {
-                    debug!(
-                        "holding the read for {} until its messages arrive",
-                        observe_str(&jid)
-                    );
-                    self.owed_reads.insert(jid.clone());
-                    mark_locally = true;
                 }
             }
         }
@@ -3364,6 +3540,9 @@ impl WhatsAppApp {
             return;
         };
         client.send_message(&jid, text, local_id.clone(), quoted.clone());
+        if self.privacy.block_read_receipts && self.privacy.auto_receipt_on_reply {
+            self.confirm_chat_read_in(&jid, cx);
+        }
 
         // Add to local chat immediately for responsiveness; the client renames
         // it to the real id via MessageIdAssigned.
@@ -3552,12 +3731,16 @@ impl WhatsAppApp {
         // the pane that shows it, so reading statuses, opening Settings or
         // walking the chat list on a phone would otherwise send a read
         // receipt for a message nobody had laid eyes on.
-        let read_now = read_is_allowed(
+        let visible_and_active = read_is_allowed(
             self.window_focused,
             crate::platform::application_is_active(),
             self.visible_chat.as_deref() == Some(chat_jid.as_str()),
             message.is_from_me,
         );
+        let read_now = visible_and_active && !self.privacy.block_read_receipts;
+        if !message.is_from_me && !message.is_read {
+            self.cancelled_auto_reads.remove(&chat_jid);
+        }
 
         // Cache the sender's name if provided
         if let Some(ref name) = sender_name {
@@ -3577,7 +3760,7 @@ impl WhatsAppApp {
         // chat asking for attention; our own sends likewise never notify us.
         let notification = (metadata.allowed
             && !message.is_read
-            && !read_now
+            && !visible_and_active
             && !message.is_from_me
             && !is_status)
             .then(|| {

@@ -301,6 +301,9 @@ fn fold_read_duplicate(
         incoming.clone()
     };
     let revoked = held.revoked || incoming.revoked;
+    let bare_tombstone = [&held, &incoming]
+        .into_iter()
+        .any(|row| row.revoked && row.text_content.is_none() && row.proto.is_none());
     let edited = match (
         held.edited_at_ms
             .map(|timestamp| (timestamp, held_edit_source_id.unwrap_or(held.id))),
@@ -318,7 +321,7 @@ fn fold_read_duplicate(
         (None, Some((_, right_id))) => Some((&incoming, right_id)),
         (None, None) => None,
     };
-    let content = if revoked {
+    let content = if bare_tombstone {
         None
     } else {
         edited.map(|(row, _)| row).or_else(|| {
@@ -352,7 +355,7 @@ fn fold_read_duplicate(
     }
     survivor.text_content = content.and_then(|row| row.text_content.clone());
     survivor.proto = content.and_then(|row| row.proto.clone());
-    survivor.proto_codec = if revoked {
+    survivor.proto_codec = if bare_tombstone {
         crate::storage_proto::CODEC_RAW
     } else {
         content.map_or(survivor.proto_codec, |row| row.proto_codec)

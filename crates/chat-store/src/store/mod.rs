@@ -312,6 +312,7 @@ pub struct ChatStore {
     tx: WriterSender,
     changes: broadcast::Sender<StoreChange>,
     skip_hook_committed: Arc<std::sync::atomic::AtomicBool>,
+    preserve_revoked: Arc<std::sync::atomic::AtomicBool>,
     // One active writer per account. Restarted daemon tokens must outrank
     // selections and removals committed by the previous runtime.
     avatar_seq_base: u64,
@@ -614,15 +615,17 @@ impl ChatStore {
         };
         let (changes, _) = broadcast::channel(CHANGE_CHANNEL_CAPACITY);
 
+        let preserve_revoked = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let this = Arc::new(Self {
             db: db.clone(),
             device_id,
             tx,
             changes: changes.clone(),
             skip_hook_committed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            preserve_revoked: Arc::clone(&preserve_revoked),
             avatar_seq_base,
         });
-        crate::spawn::spawn(writer_loop(db, device_id, rx, changes));
+        crate::spawn::spawn(writer_loop(db, device_id, rx, changes, preserve_revoked));
         Ok(this)
     }
 
@@ -630,6 +633,20 @@ impl ChatStore {
     pub async fn new(store: &SqliteStore) -> Result<Arc<Self>> {
         Self::prepare(store).await?;
         Self::new_prepared(store).await
+    }
+
+    /// Configure whether incoming sender revokes retain the original message
+    /// text and protobuf payload alongside `revoked = true`.
+    pub fn set_preserve_revoked(&self, preserve: bool) {
+        self.preserve_revoked
+            .store(preserve, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Whether incoming sender revokes currently retain their original payload.
+    #[must_use]
+    pub fn preserve_revoked(&self) -> bool {
+        self.preserve_revoked
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Declare that this client's inbound durability hook already materializes

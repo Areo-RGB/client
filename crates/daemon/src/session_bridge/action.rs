@@ -104,6 +104,8 @@ pub enum Action {
     ForgetSession(AccountDisposition),
     /// Demand profile pictures for visible rows or overscan.
     EnsureAvatars(Vec<oxidezap_core::AvatarDemand>),
+    /// Update the account's privacy and incognito enforcement policy.
+    SetPrivacyPolicy(oxidezap_core::PrivacyPolicy),
     /// Asynchronous request from the new wire protocol.
     Wire {
         id: u64,
@@ -245,6 +247,7 @@ impl Action {
                     | Self::RefreshAvatars
                     | Self::Download { .. }
                     | Self::GroupMembers { .. }
+                    | Self::SetPrivacyPolicy(_)
             ),
         }
     }

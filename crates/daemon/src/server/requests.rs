@@ -552,6 +552,9 @@ pub(super) async fn handle_request(
             }
             acted(dispatch(hub, commands, Action::EnsureAvatars(request.items)).await)
         }
+        ClientRequest::SetPrivacyPolicy { policy } => {
+            acted(dispatch(hub, commands, Action::SetPrivacyPolicy(policy)).await)
+        }
     }
 }
 

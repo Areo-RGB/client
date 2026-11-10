@@ -140,6 +140,7 @@ struct Inner {
     /// happen. Held whole rather than per plugin, because a set of some
     /// plugins is not a snapshot of the set.
     plugins: Vec<oxidezap_core::PluginSurface>,
+    privacy: oxidezap_core::PrivacyPolicy,
     /// Chats keyed by JID. A map, not a Vec: every update is a lookup by JID,
     /// and a Vec would make a rename or a receipt O(n) over every chat.
     chats: std::collections::HashMap<String, ChatEntry>,
@@ -203,6 +204,7 @@ impl StateStore {
                 calls: oxidezap_core::CallState::default(),
                 account: None,
                 plugins: Vec::new(),
+                privacy: oxidezap_core::PrivacyPolicy::default(),
                 chats: std::collections::HashMap::new(),
                 inactive_chats: std::collections::HashSet::new(),
                 account_generation: 0,
@@ -238,6 +240,7 @@ impl StateStore {
             calls: inner.calls.clone(),
             account: inner.account.clone(),
             plugins: inner.plugins.clone(),
+            privacy: inner.privacy,
         }
     }
 
@@ -249,6 +252,11 @@ impl StateStore {
     /// Whether this is the set of plugins already held, and so not news.
     pub(super) fn holds_plugins(&self, plugins: &[oxidezap_core::PluginSurface]) -> bool {
         self.lock().plugins == plugins
+    }
+
+    /// The privacy policy currently held for this account.
+    pub(super) fn privacy(&self) -> oxidezap_core::PrivacyPolicy {
+        self.lock().privacy
     }
 
     /// Everything this account had, gone with it.
@@ -268,6 +276,7 @@ impl StateStore {
         inner.inactive_chats.clear();
         inner.account = None;
         inner.calls = oxidezap_core::CallState::new();
+        inner.privacy = oxidezap_core::PrivacyPolicy::default();
         inner.version = inner.version.next();
         inner.account_generation += 1;
     }
@@ -419,6 +428,7 @@ impl StateStore {
                 inner.account = Some(account.clone());
             }
             DaemonEvent::PluginsChanged { plugins } => inner.plugins = plugins.clone(),
+            DaemonEvent::PrivacyChanged(privacy) => inner.privacy = privacy.normalized(),
         }
 
         Some(Published {

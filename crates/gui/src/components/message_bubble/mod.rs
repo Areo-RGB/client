@@ -140,7 +140,8 @@ pub fn render_message_bubble(
     let time: SharedString = format_time_local(&message.timestamp).into();
     let menu_message = message.clone();
     let status = message.delivery_in(props.is_own_number);
-    let edited = message.edited && !message.revoked;
+    let preserved_revoke = message.revoked && message.has_preserved_content();
+    let edited = message.edited && (!message.revoked || preserved_revoke);
     let is_playing = props.playing_message_id.as_deref() == Some(message_id.as_str());
     let has_reactions = !message.reactions.is_empty();
 
@@ -259,6 +260,9 @@ pub fn render_message_bubble(
                         })
                         .bg(bubble_bg)
                         .when(failed, |el| el.border_1().border_color(cx.theme().danger))
+                        .when(!failed && preserved_revoke, |el| {
+                            el.border_1().border_color(cx.theme().danger.opacity(0.45))
+                        })
                         .child(
                             v_flex()
                                 .gap(metrics.space_md())
@@ -367,8 +371,8 @@ pub fn render_message_bubble(
                                             time,
                                             status,
                                             is_from_me,
-                                            edited,
-                                            ids.edited.clone(),
+                                            edited.then(|| ids.edited.clone()),
+                                            preserved_revoke,
                                             metrics,
                                             cx,
                                         )),
@@ -562,8 +566,8 @@ fn render_meta(
     time: SharedString,
     status: Option<oxidezap_core::MessageStatus>,
     is_from_me: bool,
-    edited: bool,
-    edited_id: SharedString,
+    edited_id: Option<SharedString>,
+    preserved_revoke: bool,
     metrics: Metrics,
     cx: &App,
 ) -> impl IntoElement + use<> {
@@ -585,7 +589,14 @@ fn render_meta(
         .flex_shrink_0()
         .items_center()
         .gap(metrics.space_xs())
-        .children(edited.then(|| {
+        .children(preserved_revoke.then(|| {
+            div()
+                .text_size(metrics.text_micro())
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(cx.theme().danger)
+                .child(crate::tr!(DeletedBadge))
+        }))
+        .children(edited_id.map(|edited_id| {
             let selector = edited_id.clone();
             div()
                 .id(edited_id)

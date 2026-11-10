@@ -95,7 +95,7 @@ impl BubbleText {
 
     /// Parse every displayed text field once, when a timeline is rebuilt.
     pub fn of_message(message: &oxidezap_core::ChatMessage) -> Self {
-        if message.revoked {
+        if message.revoked && !message.has_preserved_content() {
             return Self::of(crate::tr!(MessageDeleted));
         }
         let mut parsed = Self::of(&message.content);

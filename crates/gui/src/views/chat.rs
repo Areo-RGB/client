@@ -286,6 +286,22 @@ pub fn render_connected_view(
     // the empty state are the only readers of the chat itself, and everything
     // the timeline draws has already been gathered.
     let selected_chat = open_chat.as_deref().and_then(|jid| app.chat_named(jid));
+    let incognito_bar = selected_chat
+        .filter(|chat| {
+            app.privacy_policy().block_read_receipts
+                && !chat.is_status
+                && (chat.unread_count > 0 || chat.manually_unread)
+        })
+        .map(|chat| {
+            render_incognito_bar(
+                chat.jid.clone(),
+                app.safety_delay_for(&chat.jid),
+                entity.clone(),
+                *layout.metrics(),
+                cx,
+            )
+            .into_any_element()
+        });
     // Who is in it, where it is a group and the daemon has said. Asked for
     // when the conversation was opened; until the answer lands the header
     // draws the name alone, as it did before there was anything to draw.
@@ -317,6 +333,7 @@ pub fn render_connected_view(
                         selected_chat,
                         message_cache,
                         banner,
+                        incognito_bar,
                         typing: typing.as_ref(),
                         availability: availability.as_ref(),
                         members,
@@ -384,6 +401,7 @@ struct ChatAreaProps<'a> {
     selected_chat: Option<&'a Chat>,
     message_cache: Option<MessageListCache>,
     banner: Option<(String, String)>,
+    incognito_bar: Option<gpui::AnyElement>,
     typing: Option<&'a oxidezap_core::TypingSummary>,
     availability: Option<&'a oxidezap_core::Availability>,
     /// Who is in the open conversation, when it is a group the daemon has
@@ -417,6 +435,7 @@ fn render_chat_area(
         selected_chat,
         message_cache,
         banner,
+        incognito_bar,
         typing,
         availability,
         members,
@@ -478,6 +497,7 @@ fn render_chat_area(
                     media,
                     cx,
                 ))
+                .children(incognito_bar)
                 .children(search_bar)
                 .children(banner.map(|(name, elapsed)| {
                     render_return_banner(name, elapsed, entity.clone(), metrics, cx)
@@ -614,6 +634,72 @@ fn render_return_banner(
                 .cursor_pointer()
                 .on_click(move |_, _window, cx| {
                     entity.update(cx, |app, cx| app.return_to_call(cx));
+                }),
+        )
+}
+
+/// Banner shown under the conversation header when read receipts are blocked
+/// and the open chat still has unread messages or a pending safety delay.
+fn render_incognito_bar(
+    jid: String,
+    safety_delay_secs: Option<u8>,
+    entity: Entity<WhatsAppApp>,
+    metrics: Metrics,
+    cx: &App,
+) -> impl IntoElement + use<> {
+    let confirm_jid = jid.clone();
+    let cancel_jid = jid;
+    let confirm_entity = entity.clone();
+    let cancel_entity = entity;
+    let label_text = match safety_delay_secs {
+        Some(secs) => crate::tr!(sending_read_receipts_in, secs),
+        None => crate::tr!(ReadReceiptsBlockedForThisChat).to_string(),
+    };
+
+    div()
+        .flex()
+        .items_center()
+        .gap(metrics.space_lg())
+        .px(metrics.space_xl())
+        .py(metrics.space_md())
+        .bg(cx.theme().secondary)
+        .border_b_1()
+        .border_color(cx.theme().border)
+        .child(
+            Icon::new(ProductIcon::Shield)
+                .size(metrics.icon_small())
+                .text_color(cx.theme().primary),
+        )
+        .child(
+            parts::one_line()
+                .flex_1()
+                .min_w_0()
+                .text_size(metrics.text_small())
+                .text_color(cx.theme().foreground)
+                .child(label_text),
+        )
+        .when(safety_delay_secs.is_some(), |el| {
+            el.child(
+                Button::new("incognito-cancel-delay")
+                    .label(crate::tr!(KeepUnread))
+                    .ghost()
+                    .cursor_pointer()
+                    .on_click(move |_, _window, cx| {
+                        cancel_entity.update(cx, |app, cx| {
+                            app.cancel_safety_delay(&cancel_jid, cx);
+                        });
+                    }),
+            )
+        })
+        .child(
+            Button::new("incognito-send-receipts")
+                .label(crate::tr!(SendReadReceipts))
+                .outline()
+                .cursor_pointer()
+                .on_click(move |_, _window, cx| {
+                    confirm_entity.update(cx, |app, cx| {
+                        app.confirm_chat_read(&confirm_jid, cx);
+                    });
                 }),
         )
 }

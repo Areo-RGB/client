@@ -431,6 +431,10 @@ impl<'a> Frames<'a> {
                     self.follow_calls(&calls);
                     self.publish(FromDaemon::Calls(Box::new(calls)))?;
                 }
+                DaemonEvent::PrivacyChanged(policy) => {
+                    self.applied = version;
+                    self.publish(FromDaemon::Privacy(policy))?;
+                }
                 _ => {
                     self.applied = version;
                 }
@@ -720,6 +724,7 @@ pub(super) fn catch_up(snapshot: &StateSnapshot) -> Vec<FromDaemon> {
     // would leave the previous daemon's buttons on screen with nothing behind
     // them.
     events.push(FromDaemon::Plugins(snapshot.plugins.clone()));
+    events.push(FromDaemon::Privacy(snapshot.privacy));
     match &snapshot.connection {
         ConnectionState::Connecting => events.push(session(UiEvent::InitComplete)),
         ConnectionState::Pairing { qr, pair_code } => {
@@ -737,7 +742,7 @@ pub(super) fn catch_up(snapshot: &StateSnapshot) -> Vec<FromDaemon> {
             let mut credentials = Vec::new();
             if let Some(code) = pair_code {
                 credentials.push(session(UiEvent::PairCode {
-                    code: code.code.clone(),
+                    code: code.clone().code,
                     timeout_secs: remaining_secs(code.expires_at_ms),
                 }));
             }
@@ -1861,6 +1866,7 @@ mod tests {
             calls: CallState::default(),
             account: None,
             plugins: Vec::new(),
+            privacy: Default::default(),
         }
     }
 

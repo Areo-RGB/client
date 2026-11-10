@@ -170,6 +170,7 @@ pub(super) fn apply(
     device: i32,
     bundle: &PendingHistoryBundle,
     history: Option<&wa::GroupHistory>,
+    preserve_revoked: bool,
     cs: &mut ChangeSet,
 ) -> QueryResult<()> {
     if complete(conn, device, bundle)? == 0 {
@@ -306,6 +307,7 @@ pub(super) fn apply(
             device,
             &bundle.chat_jid,
             &message,
+            preserve_revoked,
             cs,
             &mut quotes,
             true,

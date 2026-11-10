@@ -274,6 +274,7 @@ impl WhatsAppApp {
                 notification_archived,
                 chat_muted_until_ms,
             } => {
+                let visible = self.visible_chat.as_deref() == Some(chat_jid.as_str());
                 self.handle_message_received(
                     chat_jid,
                     *message,
@@ -287,6 +288,9 @@ impl WhatsAppApp {
                     .with_mute(chat_muted_until_ms),
                     cx,
                 );
+                if visible {
+                    self.resume_visible_read(cx);
+                }
                 // A live status update brings its own 24-hour deadline with
                 // it, and it can be the earliest one on screen.
                 self.ensure_status_tick(cx);

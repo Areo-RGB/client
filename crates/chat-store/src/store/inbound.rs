@@ -20,6 +20,7 @@ pub(super) fn apply_inbound(
     conn: &mut SqliteConnection,
     device_id: i32,
     inbound: &InboundMessage,
+    preserve_revoked: bool,
     cs: &mut ChangeSet,
 ) -> QueryResult<()> {
     let info = &inbound.info;
@@ -180,6 +181,7 @@ pub(super) fn apply_inbound(
                 ts_ms,
                 false,
                 false,
+                preserve_revoked,
                 cs,
             )? {
                 cs.chats = true;

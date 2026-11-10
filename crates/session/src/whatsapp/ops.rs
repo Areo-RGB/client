@@ -12,7 +12,7 @@ use whatsapp_rust::wacore_binary::jid::{Jid, JidExt as _};
 use whatsapp_rust::waproto::whatsapp as wa;
 
 use super::WhatsAppClient;
-use super::convert::{poll_creation_of, stored_to_chat_message};
+use super::convert::{poll_creation_of, stored_to_chat_message_with_policy};
 use crate::exec::Task;
 
 /// How long a backfill waits for the phone's answer to land in the store.
@@ -851,7 +851,8 @@ impl WhatsAppClient {
                 .await
                 .map_err(|e| format!("database query failed: {e}"))?
                 .ok_or_else(|| "message not found".to_string())?;
-            let downloadable = stored_to_chat_message(stored)
+            let preserve = live.chat_store.preserve_revoked();
+            let downloadable = stored_to_chat_message_with_policy(stored, preserve)
                 .media
                 .and_then(|media| media.downloadable)
                 .ok_or_else(|| "that message carries no downloadable media".to_string())?;
@@ -887,7 +888,8 @@ impl WhatsAppClient {
                 .ok_or_else(|| "message not found".to_string())?;
             let from_me = stored.from_me;
             let sender = stored.sender_jid.clone();
-            let downloadable = stored_to_chat_message(stored)
+            let preserve = live.chat_store.preserve_revoked();
+            let downloadable = stored_to_chat_message_with_policy(stored, preserve)
                 .media
                 .and_then(|media| media.downloadable)
                 .ok_or_else(|| "that message carries no downloadable media".to_string())?;
@@ -934,8 +936,11 @@ impl WhatsAppClient {
                 .await
                 .map_err(|e| format!("database query failed: {e}"))?;
             let chats: Vec<String> = rows.iter().map(|s| s.chat_jid.to_string()).collect();
-            let mut messages: Vec<oxidezap_core::ChatMessage> =
-                rows.into_iter().map(stored_to_chat_message).collect();
+            let preserve = live.chat_store.preserve_revoked();
+            let mut messages: Vec<oxidezap_core::ChatMessage> = rows
+                .into_iter()
+                .map(|row| stored_to_chat_message_with_policy(row, preserve))
+                .collect();
             Self::hydrate_sender_names(
                 &live.chat_store,
                 &live.client,
@@ -1155,6 +1160,7 @@ impl WhatsAppClient {
                 .pending_media_messages(chat.as_ref(), limit.clamp(1, 200))
                 .await
                 .map_err(|e| format!("database query failed: {e}"))?;
+            let preserve = live.chat_store.preserve_revoked();
             let mut report = BackfillReport {
                 requested: 0,
                 files: Vec::new(),
@@ -1162,7 +1168,7 @@ impl WhatsAppClient {
             for stored in rows {
                 let chat_jid = stored.chat_jid.to_string();
                 let message_id = stored.id.clone();
-                let Some(downloadable) = stored_to_chat_message(stored)
+                let Some(downloadable) = stored_to_chat_message_with_policy(stored, preserve)
                     .media
                     .and_then(|media| media.downloadable)
                 else {
@@ -1218,8 +1224,11 @@ impl WhatsAppClient {
                 .await
                 .map_err(|e| format!("database query failed: {e}"))?;
             let chats: Vec<String> = rows.iter().map(|s| s.chat_jid.to_string()).collect();
-            let messages: Vec<oxidezap_core::ChatMessage> =
-                rows.into_iter().map(stored_to_chat_message).collect();
+            let preserve = live.chat_store.preserve_revoked();
+            let messages: Vec<oxidezap_core::ChatMessage> = rows
+                .into_iter()
+                .map(|row| stored_to_chat_message_with_policy(row, preserve))
+                .collect();
             Ok(chats.into_iter().zip(messages).collect())
         })
     }

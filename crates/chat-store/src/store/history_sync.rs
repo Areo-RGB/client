@@ -22,6 +22,7 @@ pub(super) fn apply_history_sync(
     conn: &mut SqliteConnection,
     device_id: i32,
     lazy: &wacore::types::events::LazyHistorySync,
+    preserve_revoked: bool,
     cs: &mut ChangeSet,
 ) -> QueryResult<()> {
     let mut stream = lazy.stream();
@@ -37,7 +38,7 @@ pub(super) fn apply_history_sync(
                 return Ok(());
             }
         };
-        apply_history_conversation(conn, device_id, &conv, cs)?;
+        apply_history_conversation(conn, device_id, &conv, preserve_revoked, cs)?;
     }
     if stream.skipped_conversations() > 0 {
         warn!(
@@ -62,6 +63,7 @@ fn apply_history_conversation(
     conn: &mut SqliteConnection,
     device_id: i32,
     conv: &wa::Conversation,
+    preserve_revoked: bool,
     cs: &mut ChangeSet,
 ) -> QueryResult<()> {
     let chat = &crate::lid::route_chat_key(conn, device_id, conv.id.as_str(), cs)?;
@@ -184,7 +186,16 @@ fn apply_history_conversation(
         let Some(wmi) = hist_msg.message.as_option() else {
             continue;
         };
-        apply_history_message(conn, device_id, chat, wmi, cs, &mut pending_quotes, false)?;
+        apply_history_message(
+            conn,
+            device_id,
+            chat,
+            wmi,
+            preserve_revoked,
+            cs,
+            &mut pending_quotes,
+            false,
+        )?;
     }
     strip_pending_quotes(conn, device_id, chat, &pending_quotes)?;
     // Backfill the denormalized preview from the newest materialized row, so a
@@ -323,11 +334,13 @@ fn apply_history_conversation(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn apply_history_message(
     conn: &mut SqliteConnection,
     device_id: i32,
     chat: &str,
     wmi: &wa::WebMessageInfo,
+    preserve_revoked: bool,
     cs: &mut ChangeSet,
     pending_quotes: &mut Vec<PendingQuote>,
     shared: bool,
@@ -470,6 +483,7 @@ pub(super) fn apply_history_message(
                     ts_ms,
                     false,
                     shared,
+                    preserve_revoked,
                     cs,
                 )? {
                     cs.chats = true;

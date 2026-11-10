@@ -31,7 +31,7 @@ pub fn render(
         SettingsSection::Account => account(app, entity, metrics, cx),
         SettingsSection::Notifications => notifications(metrics, cx),
         SettingsSection::AudioVideo => super::devices::render(app, entity.clone(), metrics, cx),
-        SettingsSection::Privacy => privacy(entity.clone(), metrics, cx),
+        SettingsSection::Privacy => privacy(app, entity.clone(), metrics, cx),
         SettingsSection::Storage => storage(app, entity, metrics, cx),
         SettingsSection::Advanced => advanced(entity, metrics, cx),
         SettingsSection::Plugins => plugins(app, entity, metrics, cx),
@@ -433,11 +433,251 @@ fn notifications(metrics: Metrics, cx: &App) -> AnyElement {
     .into_any_element()
 }
 
-fn privacy(entity: Entity<WhatsAppApp>, metrics: Metrics, cx: &App) -> AnyElement {
+fn privacy(
+    app: &WhatsAppApp,
+    entity: Entity<WhatsAppApp>,
+    metrics: Metrics,
+    cx: &App,
+) -> AnyElement {
+    let policy = app.privacy_policy();
+    let delay = policy.safety_delay_secs;
+    let delay_label = if delay == 0 {
+        crate::tr!(SafetyDelayOff).to_string()
+    } else {
+        crate::tr!(safety_delay_seconds, delay)
+    };
+    let delay_fraction =
+        (f32::from(delay) / f32::from(oxidezap_core::MAX_SAFETY_DELAY_SECS)).clamp(0.0, 1.0);
+
+    let toggle_receipts = entity.clone();
+    let toggle_reply = entity.clone();
+    let toggle_online = entity.clone();
+    let toggle_typing = entity.clone();
+    let toggle_deleted = entity.clone();
+    let delay_minus = entity.clone();
+    let delay_plus = entity.clone();
+
     div()
         .flex()
         .flex_col()
         .gap(metrics.space_xxl())
+        .child(group(
+            label(crate::tr!(Incognito), metrics, cx),
+            div()
+                .flex()
+                .flex_col()
+                .gap(metrics.space_lg())
+                .child(
+                    div()
+                        .text_size(metrics.text_small())
+                        .text_color(cx.theme().muted_foreground)
+                        .child(crate::tr!(IncognitoGuidance)),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .gap(metrics.space_md())
+                        .child(
+                            Button::new("privacy-block-read-receipts")
+                                .label(crate::tr!(BlockReadReceipts))
+                                .outline()
+                                .selected(policy.block_read_receipts)
+                                .px(metrics.space_xl())
+                                .py(metrics.space_md())
+                                .rounded(metrics.radius_md())
+                                .text_size(metrics.text_small())
+                                .cursor_pointer()
+                                .on_click(move |_, _window, cx| {
+                                    let mut next = policy;
+                                    next.block_read_receipts = !next.block_read_receipts;
+                                    toggle_receipts.update(cx, |app, cx| {
+                                        app.set_privacy_policy(next, cx);
+                                    });
+                                }),
+                        )
+                        .child(
+                            Button::new("privacy-auto-receipt-on-reply")
+                                .label(crate::tr!(AutoReceiptOnReply))
+                                .outline()
+                                .selected(policy.auto_receipt_on_reply)
+                                .disabled(!policy.block_read_receipts)
+                                .px(metrics.space_xl())
+                                .py(metrics.space_md())
+                                .rounded(metrics.radius_md())
+                                .text_size(metrics.text_small())
+                                .when(policy.block_read_receipts, |btn| btn.cursor_pointer())
+                                .on_click(move |_, _window, cx| {
+                                    let mut next = policy;
+                                    next.auto_receipt_on_reply = !next.auto_receipt_on_reply;
+                                    toggle_reply.update(cx, |app, cx| {
+                                        app.set_privacy_policy(next, cx);
+                                    });
+                                }),
+                        )
+                        .child(
+                            Button::new("privacy-block-online")
+                                .label(crate::tr!(BlockPresenceUpdates))
+                                .outline()
+                                .selected(policy.block_online_updates)
+                                .px(metrics.space_xl())
+                                .py(metrics.space_md())
+                                .rounded(metrics.radius_md())
+                                .text_size(metrics.text_small())
+                                .cursor_pointer()
+                                .on_click(move |_, _window, cx| {
+                                    let mut next = policy;
+                                    next.block_online_updates = !next.block_online_updates;
+                                    toggle_online.update(cx, |app, cx| {
+                                        app.set_privacy_policy(next, cx);
+                                    });
+                                }),
+                        )
+                        .child(
+                            Button::new("privacy-block-typing")
+                                .label(crate::tr!(BlockTypingUpdates))
+                                .outline()
+                                .selected(policy.block_typing_updates)
+                                .px(metrics.space_xl())
+                                .py(metrics.space_md())
+                                .rounded(metrics.radius_md())
+                                .text_size(metrics.text_small())
+                                .cursor_pointer()
+                                .on_click(move |_, _window, cx| {
+                                    let mut next = policy;
+                                    next.block_typing_updates = !next.block_typing_updates;
+                                    toggle_typing.update(cx, |app, cx| {
+                                        app.set_privacy_policy(next, cx);
+                                    });
+                                }),
+                        )
+                        .child(
+                            Button::new("privacy-preserve-deleted")
+                                .label(crate::tr!(PreserveDeletedMessages))
+                                .outline()
+                                .selected(policy.preserve_deleted_messages)
+                                .px(metrics.space_xl())
+                                .py(metrics.space_md())
+                                .rounded(metrics.radius_md())
+                                .text_size(metrics.text_small())
+                                .cursor_pointer()
+                                .on_click(move |_, _window, cx| {
+                                    let mut next = policy;
+                                    next.preserve_deleted_messages =
+                                        !next.preserve_deleted_messages;
+                                    toggle_deleted.update(cx, |app, cx| {
+                                        app.set_privacy_policy(next, cx);
+                                    });
+                                }),
+                        ),
+                )
+                .child(
+                    div()
+                        .text_size(metrics.text_meta())
+                        .text_color(cx.theme().muted_foreground)
+                        .child(crate::tr!(BlockReadReceiptsNote)),
+                )
+                .child(
+                    div()
+                        .text_size(metrics.text_meta())
+                        .text_color(cx.theme().muted_foreground)
+                        .child(crate::tr!(PreserveDeletedMessagesNote)),
+                ),
+            metrics,
+        ))
+        .child(group(
+            div()
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .justify_between()
+                .gap(metrics.space_lg())
+                .child(label(crate::tr!(SafetyDelay), metrics, cx))
+                .child(
+                    div()
+                        .font_family(cx.theme().mono_font_family.clone())
+                        .text_size(metrics.text_meta())
+                        .text_color(cx.theme().foreground)
+                        .child(delay_label),
+                ),
+            div()
+                .flex()
+                .flex_col()
+                .gap(metrics.space_md())
+                .child(
+                    div()
+                        .w_full()
+                        .min_w_0()
+                        .flex()
+                        .items_center()
+                        .gap(metrics.space_md())
+                        .child(
+                            Button::new("privacy-delay-minus")
+                                .icon(IconName::Minus)
+                                .outline()
+                                .small()
+                                .disabled(!policy.block_read_receipts || delay == 0)
+                                .when(policy.block_read_receipts && delay > 0, |btn| {
+                                    btn.cursor_pointer()
+                                })
+                                .on_click(move |_, _window, cx| {
+                                    let mut next = policy;
+                                    next.safety_delay_secs =
+                                        next.safety_delay_secs.saturating_sub(1);
+                                    delay_minus.update(cx, |app, cx| {
+                                        app.set_privacy_policy(next, cx);
+                                    });
+                                }),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .h(metrics.space_xs())
+                                .rounded_full()
+                                .bg(cx.theme().secondary)
+                                .child(
+                                    div()
+                                        .h_full()
+                                        .w(gpui::relative(delay_fraction))
+                                        .rounded_full()
+                                        .bg(cx.theme().primary),
+                                ),
+                        )
+                        .child(
+                            Button::new("privacy-delay-plus")
+                                .icon(IconName::Plus)
+                                .outline()
+                                .small()
+                                .disabled(
+                                    !policy.block_read_receipts
+                                        || delay >= oxidezap_core::MAX_SAFETY_DELAY_SECS,
+                                )
+                                .when(
+                                    policy.block_read_receipts
+                                        && delay < oxidezap_core::MAX_SAFETY_DELAY_SECS,
+                                    |btn| btn.cursor_pointer(),
+                                )
+                                .on_click(move |_, _window, cx| {
+                                    let mut next = policy;
+                                    next.safety_delay_secs = next
+                                        .safety_delay_secs
+                                        .saturating_add(1)
+                                        .min(oxidezap_core::MAX_SAFETY_DELAY_SECS);
+                                    delay_plus.update(cx, |app, cx| {
+                                        app.set_privacy_policy(next, cx);
+                                    });
+                                }),
+                        ),
+                )
+                .child(
+                    div()
+                        .min_w_0()
+                        .text_size(metrics.text_small())
+                        .text_color(cx.theme().muted_foreground)
+                        .child(crate::tr!(SafetyDelayNote)),
+                ),
+            metrics,
+        ))
         .child(group(
             label(crate::tr!(Encryption), metrics, cx),
             div()

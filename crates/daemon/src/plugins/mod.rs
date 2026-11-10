@@ -361,6 +361,7 @@ impl Commands for Bridge {
         self.ask(Action::MarkRead(oxidezap_ipc::MarkRead {
             jid: jid.to_owned(),
             through_message_id: message_id.map(str::to_owned),
+            force: false,
         }))
     }
 

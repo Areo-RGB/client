@@ -114,6 +114,7 @@ impl Bridge {
                     hub.connection().is_connected()
                         && !hub.is_logged_out()
                         && !lifecycle.is_stopping()
+                        && !hub.privacy().block_read_receipts
                 });
                 oxidezap_session::spawn(async move {
                     let outcome = match task.await {
@@ -802,7 +803,8 @@ impl Bridge {
             } => {
                 // Answered here, not from a task: the read is bounded and
                 // applied synchronously, and the receipts leave on their own.
-                let outcome = self.mark_read(client, &chat_jid, through_message_id.as_deref());
+                let outcome =
+                    self.mark_read(client, &chat_jid, through_message_id.as_deref(), false);
                 let result = match outcome {
                     CommandOutcome::Accepted => Ok(DaemonResponse::Ack),
                     CommandOutcome::NoSession(detail) => Err(ApiError::not_connected(detail)),
@@ -842,7 +844,9 @@ impl Bridge {
             }
             WireRequest::SetPresence { chat_jid, state } => match state {
                 PresenceState::Composing => {
-                    if let Some(chat) = chat_jid {
+                    if let Some(chat) = chat_jid
+                        && !self.hub.privacy().block_typing_updates
+                    {
                         client.send_composing(&chat);
                     }
                     send_wire_result(&answer_to, id, Ok(DaemonResponse::Ack));
@@ -858,7 +862,9 @@ impl Bridge {
                     drop(permit);
                 }
                 PresenceState::Recording => {
-                    if let Some(chat) = chat_jid {
+                    if let Some(chat) = chat_jid
+                        && !self.hub.privacy().block_typing_updates
+                    {
                         client.send_recording(&chat);
                     }
                     send_wire_result(&answer_to, id, Ok(DaemonResponse::Ack));
@@ -866,10 +872,16 @@ impl Bridge {
                     drop(permit);
                 }
                 PresenceState::Available => {
-                    let task = client.set_available();
-                    run_wire(answer_to.clone(), id, reply, permit, task, |()| {
-                        DaemonResponse::Ack
-                    });
+                    if self.hub.privacy().block_online_updates {
+                        send_wire_result(&answer_to, id, Ok(DaemonResponse::Ack));
+                        let _ = reply.send(CommandOutcome::Accepted);
+                        drop(permit);
+                    } else {
+                        let task = client.set_available();
+                        run_wire(answer_to.clone(), id, reply, permit, task, |()| {
+                            DaemonResponse::Ack
+                        });
+                    }
                 }
                 PresenceState::Unavailable => {
                     let task = client.set_unavailable();
@@ -1497,6 +1509,7 @@ impl Bridge {
                         quoted,
                     )],
                 );
+                self.auto_receipt_on_reply(client, &jid);
                 CommandOutcome::Accepted
             }
             Action::SendReaction(oxidezap_ipc::SendReaction {
@@ -1559,6 +1572,7 @@ impl Bridge {
                         quoted,
                     )],
                 );
+                self.auto_receipt_on_reply(client, &jid);
                 CommandOutcome::Accepted
             }
             Action::SendMedia(oxidezap_ipc::SendMedia {
@@ -1627,12 +1641,14 @@ impl Bridge {
                         quoted,
                     )],
                 );
+                self.auto_receipt_on_reply(client, &jid);
                 CommandOutcome::Accepted
             }
             Action::MarkRead(oxidezap_ipc::MarkRead {
                 jid,
                 through_message_id,
-            }) => self.mark_read(client, &jid, through_message_id.as_deref()),
+                force,
+            }) => self.mark_read(client, &jid, through_message_id.as_deref(), force),
             // Answered from a task of its own. See `begin_slow`.
             Action::MarkAudioPlayed(_)
             | Action::MarkStatusWatched(_)
@@ -1643,7 +1659,9 @@ impl Bridge {
             }
             Action::Typing(oxidezap_ipc::Typing { jid, composing }) => {
                 if composing {
-                    client.send_composing(&jid);
+                    if !self.hub.privacy().block_typing_updates {
+                        client.send_composing(&jid);
+                    }
                 } else {
                     client.send_paused(&jid);
                 }
@@ -1860,6 +1878,13 @@ impl Bridge {
                 client.ensure_avatars(items);
                 CommandOutcome::Accepted
             }
+            Action::SetPrivacyPolicy(policy) => {
+                let policy = policy.normalized();
+                client.set_preserve_deleted_messages(policy.preserve_deleted_messages);
+                self.hub.set_privacy(policy);
+                crate::privacy::save(self.hub.account_id(), policy);
+                CommandOutcome::Accepted
+            }
             Action::RefreshVideo => {
                 // A window is drawing again — or for the first time. The gate
                 // opens before the keyframe is asked for, so the frame that
@@ -1985,14 +2010,44 @@ impl Bridge {
         CommandOutcome::Accepted
     }
 
+    /// Flush read receipts on outgoing reply when configured by the privacy
+    /// policy.
+    fn auto_receipt_on_reply(&mut self, client: &WhatsAppClient, jid: &str) {
+        let privacy = self.hub.privacy();
+        if privacy.block_read_receipts
+            && privacy.auto_receipt_on_reply
+            && self.hub.chat(jid).is_some_and(|c| c.has_unread())
+        {
+            let _ = self.mark_read(client, jid, None, true);
+        }
+    }
+
     /// Mark a chat read, no further than the requester has actually seen.
     fn mark_read(
         &mut self,
         client: &WhatsAppClient,
         jid: &str,
         through_message_id: Option<&str>,
+        force: bool,
     ) -> CommandOutcome {
-        let (boundary, read) = match self.read_plan(jid, through_message_id) {
+        if self.hub.privacy().block_read_receipts && !force {
+            return CommandOutcome::Accepted;
+        }
+        let fallback_id = if force && through_message_id.is_none() {
+            self.reads()
+                .boundary(jid)
+                .and_then(|(_, ids)| ids.first().map(|(id, _, _)| id.clone()))
+                .or_else(|| {
+                    self.hub
+                        .chat(jid)
+                        .and_then(|s| s.last_message)
+                        .and_then(|m| m.id)
+                })
+        } else {
+            None
+        };
+        let effective_through = through_message_id.or(fallback_id.as_deref());
+        let (boundary, read) = match self.read_plan(jid, effective_through) {
             Ok(plan) => plan,
             Err(reason) => return CommandOutcome::Refused(reason),
         };

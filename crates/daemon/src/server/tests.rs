@@ -902,6 +902,7 @@ async fn a_refusal_at_execution_time_reaches_the_client() {
     let request = bare(ClientRequest::MarkRead(oxidezap_ipc::MarkRead {
         jid: "a@s.whatsapp.net".into(),
         through_message_id: None,
+        force: false,
     }));
     let answer = handle_request(request, &hub, &no_plugins(), &commands, &outbox()).await;
     assert!(matches!(
@@ -2588,4 +2589,61 @@ async fn scoped_wire_hello_confirms_successor_and_never_rebinds_after_selection_
         ResponseResult::Ok { payload } if matches!(*payload, WireResponse::Status(ref status) if status.state == "connected"))
     );
     served.abort();
+}
+
+#[tokio::test]
+async fn privacy_policy_gates_automatic_reads_and_typing_while_honouring_force_override() {
+    let hub = connected_hub();
+    let policy = oxidezap_core::PrivacyPolicy {
+        block_read_receipts: true,
+        auto_receipt_on_reply: true,
+        safety_delay_secs: 5,
+        block_typing_updates: true,
+        block_online_updates: true,
+        preserve_deleted_messages: true,
+    };
+    hub.set_privacy(policy);
+    assert_eq!(hub.privacy(), policy);
+
+    let (commands, taken) = bridge(CommandOutcome::Accepted);
+
+    // Automatic MarkRead (`force: false`) is suppressed before reaching the session bridge.
+    let suppressed_read = bare(ClientRequest::MarkRead(oxidezap_ipc::MarkRead {
+        jid: "a@s.whatsapp.net".into(),
+        through_message_id: Some("M1".into()),
+        force: false,
+    }));
+    let answer = handle_request(suppressed_read, &hub, &no_plugins(), &commands, &outbox()).await;
+    assert!(matches!(
+        parse(answer.frame),
+        DaemonMessage::Accepted { .. }
+    ));
+
+    // Composing typing indicator is suppressed when `block_typing_updates` is active.
+    let suppressed_typing = bare(ClientRequest::Typing(oxidezap_ipc::Typing {
+        jid: "a@s.whatsapp.net".into(),
+        composing: true,
+    }));
+    let answer = handle_request(suppressed_typing, &hub, &no_plugins(), &commands, &outbox()).await;
+    assert!(matches!(
+        parse(answer.frame),
+        DaemonMessage::Accepted { .. }
+    ));
+
+    // Forced MarkRead (`force: true`) bypasses `block_read_receipts` and reaches the bridge.
+    let forced_read = bare(ClientRequest::MarkRead(oxidezap_ipc::MarkRead {
+        jid: "a@s.whatsapp.net".into(),
+        through_message_id: Some("M1".into()),
+        force: true,
+    }));
+    let answer = handle_request(forced_read, &hub, &no_plugins(), &commands, &outbox()).await;
+    assert!(matches!(
+        parse(answer.frame),
+        DaemonMessage::Accepted { .. }
+    ));
+    drop(commands);
+    assert!(matches!(
+        taken.await.unwrap().expect("forced MarkRead reaches bridge"),
+        Action::MarkRead(ref req) if req.force && req.through_message_id.as_deref() == Some("M1")
+    ));
 }

@@ -18,7 +18,7 @@ use whatsapp_rust::waproto::whatsapp as wa;
 use oxidezap_core::{Chat, ChatMessage};
 
 use super::WhatsAppClient;
-use super::convert::{stored_to_chat_message, stored_with_unread_tail};
+use super::convert::{stored_to_chat_message_with_policy, stored_with_unread_tail_with_policy};
 use crate::exec::Task;
 use crate::names::NameBook;
 
@@ -200,8 +200,11 @@ impl WhatsAppClient {
                     .await
                     .map_err(|e| format!("search failed: {e}"))?
             };
-            let mut messages: Vec<ChatMessage> =
-                hits.into_iter().map(stored_to_chat_message).collect();
+            let preserve = live.chat_store.preserve_revoked();
+            let mut messages: Vec<ChatMessage> = hits
+                .into_iter()
+                .map(|row| stored_to_chat_message_with_policy(row, preserve))
+                .collect();
             Self::hydrate_sender_names(
                 &live.chat_store,
                 &live.client,
@@ -234,7 +237,8 @@ impl WhatsAppClient {
                 .await
                 .map_err(|e| format!("database query failed: {e}"))?;
             if let Some(s) = stored {
-                let mut msgs = vec![stored_to_chat_message(s)];
+                let preserve = live.chat_store.preserve_revoked();
+                let mut msgs = vec![stored_to_chat_message_with_policy(s, preserve)];
                 Self::hydrate_sender_names(
                     &live.chat_store,
                     &live.client,
@@ -279,11 +283,12 @@ impl WhatsAppClient {
                 .messages(&chat, Some(before_cursor), (limit / 2).max(1) as i64)
                 .await
                 .map_err(|e| format!("query failed: {e}"))?;
+            let preserve = live.chat_store.preserve_revoked();
             let mut result = Vec::with_capacity(before_messages.len() + 1);
             for m in before_messages.into_iter().rev() {
-                result.push(stored_to_chat_message(m));
+                result.push(stored_to_chat_message_with_policy(m, preserve));
             }
-            result.push(stored_to_chat_message(target));
+            result.push(stored_to_chat_message_with_policy(target, preserve));
             Self::hydrate_sender_names(
                 &live.chat_store,
                 &live.client,
@@ -445,8 +450,11 @@ impl WhatsAppClient {
         });
         let mention_lists = crate::mentions::mention_lists_of(&page);
         let quoted_lists = crate::mentions::quoted_mention_lists_of(&page);
-        let mut messages: Vec<ChatMessage> =
-            stored_with_unread_tail(page, unread.clamp(0, u32::MAX as i64) as u32);
+        let mut messages: Vec<ChatMessage> = stored_with_unread_tail_with_policy(
+            page,
+            unread.clamp(0, u32::MAX as i64) as u32,
+            store.preserve_revoked(),
+        );
         if let Some(status_views) = status_views {
             for (message, watched) in messages.iter_mut().zip(status_views) {
                 if !message.is_from_me && message.system.is_none() {

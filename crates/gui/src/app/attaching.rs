@@ -435,6 +435,9 @@ impl WhatsAppApp {
         // The bubble shows the quote too, or the sender sees a bare photo
         // where the recipient sees a reply.
         message.quoted = quoted;
+        if self.privacy.block_read_receipts && self.privacy.auto_receipt_on_reply {
+            self.confirm_chat_read_in(jid, cx);
+        }
         self.add_message_to_chat(jid, message, cx)
     }
 }

@@ -180,7 +180,10 @@ pub(crate) fn merge_rows(
         .expect("merge_rows is called with a non-empty proven set");
     let survivor_id = survivor.id;
     let tombstone = rows.iter().any(|row| row.revoked);
-    let content = if tombstone {
+    let bare_tombstone = rows
+        .iter()
+        .any(|row| row.revoked && row.text_content.is_none() && row.proto.is_none());
+    let content = if bare_tombstone {
         None
     } else {
         rows.iter()
@@ -213,7 +216,7 @@ pub(crate) fn merge_rows(
         .map(|row| row.timestamp_ms)
         .max()
         .unwrap_or(survivor.timestamp_ms);
-    let edited_at_ms = if tombstone {
+    let edited_at_ms = if bare_tombstone {
         rows.iter().filter_map(|row| row.edited_at_ms).max()
     } else {
         content.and_then(|row| row.edited_at_ms)
@@ -243,17 +246,17 @@ pub(crate) fn merge_rows(
             dsl::sender_jid.eq(&sender_jid),
             dsl::timestamp_ms.eq(timestamp_ms),
             dsl::kind.eq(content.map_or(survivor.kind.as_str(), |row| row.kind.as_str())),
-            dsl::text_content.eq(if tombstone {
+            dsl::text_content.eq(if bare_tombstone {
                 None
             } else {
                 content.and_then(|row| row.text_content.as_deref())
             }),
-            dsl::proto.eq(if tombstone {
+            dsl::proto.eq(if bare_tombstone {
                 None
             } else {
                 content.and_then(|row| row.proto.as_deref())
             }),
-            dsl::proto_codec.eq(if tombstone {
+            dsl::proto_codec.eq(if bare_tombstone {
                 crate::storage_proto::CODEC_RAW
             } else {
                 content.map_or(survivor.proto_codec, |row| row.proto_codec)

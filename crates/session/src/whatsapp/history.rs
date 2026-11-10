@@ -20,7 +20,7 @@ use whatsapp_rust::wacore_binary::jid::{Jid, observe_str};
 use oxidezap_core::{Chat, ChatMessage, UiEvent};
 
 use super::WhatsAppClient;
-use super::convert::stored_with_unread_tail;
+use super::convert::stored_with_unread_tail_with_policy;
 use super::paging::chat_cursor;
 use super::ui_queue::Sender as UiEventSender;
 use crate::names::NameBook;
@@ -572,8 +572,11 @@ impl WhatsAppClient {
                 }
                 let mention_lists = crate::mentions::mention_lists_of(&page);
                 let quoted_lists = crate::mentions::quoted_mention_lists_of(&page);
-                let mut msgs: Vec<ChatMessage> =
-                    stored_with_unread_tail(page, entry.unread_count.max(0) as u32);
+                let mut msgs: Vec<ChatMessage> = stored_with_unread_tail_with_policy(
+                    page,
+                    entry.unread_count.max(0) as u32,
+                    chat_store.preserve_revoked(),
+                );
                 crate::mentions::hydrate_mention_lists(client, names, &mention_lists, &mut msgs)
                     .await;
                 crate::mentions::hydrate_quoted_mention_lists(
@@ -642,7 +645,11 @@ impl WhatsAppClient {
             }
             let mention_lists = crate::mentions::mention_lists_of(&page);
             let quoted_lists = crate::mentions::quoted_mention_lists_of(&page);
-            chat.messages = stored_with_unread_tail(page, chat.unread_count);
+            chat.messages = stored_with_unread_tail_with_policy(
+                page,
+                chat.unread_count,
+                chat_store.preserve_revoked(),
+            );
             crate::mentions::hydrate_mention_lists(
                 client,
                 names,

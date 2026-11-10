@@ -52,6 +52,7 @@ pub(super) async fn writer_loop(
     device_id: i32,
     mut rx: mpsc::UnboundedReceiver<QueuedWrite>,
     changes: broadcast::Sender<StoreChange>,
+    preserve_revoked: Arc<std::sync::atomic::AtomicBool>,
 ) {
     let deferred = Arc::new(std::sync::Mutex::new(DeferredAcks::default()));
     let mut pending = VecDeque::new();
@@ -73,7 +74,15 @@ pub(super) async fn writer_loop(
             WriterMsg::Flush(done) | WriterMsg::Stop(done) => {
                 // Stop and flush use the same result, but stop also releases
                 // every retained payload and the database before answering.
-                let result = drain_pending(&db, device_id, &mut pending, &changes, &deferred).await;
+                let result = drain_pending(
+                    &db,
+                    device_id,
+                    &mut pending,
+                    &changes,
+                    &deferred,
+                    &preserve_revoked,
+                )
+                .await;
                 paused = result.is_err();
                 if let Err(error) = result {
                     pending_error.get_or_insert(error);
@@ -121,7 +130,15 @@ pub(super) async fn writer_loop(
                         pending.len()
                     ))
                 } else {
-                    drain_pending(&db, device_id, &mut pending, &changes, &deferred).await
+                    drain_pending(
+                        &db,
+                        device_id,
+                        &mut pending,
+                        &changes,
+                        &deferred,
+                        &preserve_revoked,
+                    )
+                    .await
                 };
                 paused = result.is_err();
                 let result = match result {
@@ -131,9 +148,16 @@ pub(super) async fn writer_loop(
                             write_loss: false,
                             _permit: queued._permit,
                         }]);
-                        attempt_batch(&db, device_id, &batch, &changes, &deferred)
-                            .await
-                            .map_err(|(error, _committed)| error)
+                        attempt_batch(
+                            &db,
+                            device_id,
+                            &batch,
+                            &changes,
+                            &deferred,
+                            &preserve_revoked,
+                        )
+                        .await
+                        .map_err(|(error, _committed)| error)
                     }
                     Err(error) => Err(error),
                 };
@@ -170,8 +194,15 @@ pub(super) async fn writer_loop(
                 // Once attempts are exhausted, new traffic does not keep
                 // retrying a poison write. Only an explicit barrier retries.
                 if !paused
-                    && let Err(error) =
-                        drain_pending(&db, device_id, &mut pending, &changes, &deferred).await
+                    && let Err(error) = drain_pending(
+                        &db,
+                        device_id,
+                        &mut pending,
+                        &changes,
+                        &deferred,
+                        &preserve_revoked,
+                    )
+                    .await
                 {
                     paused = true;
                     pending_error.get_or_insert(error);
@@ -193,6 +224,7 @@ async fn drain_pending(
     pending: &mut VecDeque<QueuedWrite>,
     changes: &broadcast::Sender<StoreChange>,
     deferred: &Arc<std::sync::Mutex<DeferredAcks>>,
+    preserve_revoked: &Arc<std::sync::atomic::AtomicBool>,
 ) -> std::result::Result<(), String> {
     while !pending.is_empty() {
         let batch = Arc::new(
@@ -201,7 +233,7 @@ async fn drain_pending(
                 .collect::<Vec<_>>(),
         );
         if let Err((error, committed)) =
-            attempt_batch(db, device_id, &batch, changes, deferred).await
+            attempt_batch(db, device_id, &batch, changes, deferred, preserve_revoked).await
         {
             if !committed {
                 // The blocking closure has completed, so this is the sole owner.
@@ -226,6 +258,7 @@ async fn attempt_batch(
     batch: &Arc<Vec<QueuedWrite>>,
     changes: &broadcast::Sender<StoreChange>,
     deferred: &Arc<std::sync::Mutex<DeferredAcks>>,
+    preserve_revoked: &Arc<std::sync::atomic::AtomicBool>,
 ) -> std::result::Result<(), (String, bool)> {
     const ATTEMPTS: usize = 3;
     for attempt in 0..ATTEMPTS {
@@ -236,6 +269,7 @@ async fn attempt_batch(
         };
         let shared = Arc::clone(deferred);
         let input = Arc::clone(batch);
+        let preserve = preserve_revoked.load(std::sync::atomic::Ordering::Relaxed);
         let committed_changes = Arc::new(std::sync::Mutex::new((None, None)));
         let committed_changes_for_db = Arc::clone(&committed_changes);
         let result = db
@@ -244,9 +278,14 @@ async fn attempt_batch(
                 let result = conn.transaction(|conn| {
                     let mut cs = ChangeSet::default();
                     for queued in input.iter() {
-                        if let Err(error) =
-                            apply_writer_msg(conn, device_id, &queued.message, &mut cs, &mut acks)
-                        {
+                        if let Err(error) = apply_writer_msg(
+                            conn,
+                            device_id,
+                            &queued.message,
+                            preserve,
+                            &mut cs,
+                            &mut acks,
+                        ) {
                             committed_changes_for_db
                                 .lock()
                                 .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -392,11 +431,14 @@ fn apply_writer_msg(
     conn: &mut SqliteConnection,
     device_id: i32,
     msg: &WriterMsg,
+    preserve_revoked: bool,
     cs: &mut ChangeSet,
     deferred: &mut DeferredAcks,
 ) -> QueryResult<()> {
     match msg {
-        WriterMsg::Event(event) => apply_event(conn, device_id, event, cs, deferred),
+        WriterMsg::Event(event) => {
+            apply_event(conn, device_id, event, preserve_revoked, cs, deferred)
+        }
         WriterMsg::Operation { chat, operation_id } => deferred.record_operation(
             conn,
             device_id,
@@ -405,7 +447,7 @@ fn apply_writer_msg(
             wacore::time::now_utc().timestamp_millis(),
         ),
         WriterMsg::InboundDurability { event, .. } => {
-            apply_event(conn, device_id, event, cs, deferred)
+            apply_event(conn, device_id, event, preserve_revoked, cs, deferred)
         }
         WriterMsg::Reconcile(chat) => {
             let wire = chat.to_string();
@@ -427,9 +469,14 @@ fn apply_writer_msg(
         WriterMsg::SharedHistoryAttempt(bundle) => {
             super::shared_history::attempted(conn, device_id, bundle)
         }
-        WriterMsg::SharedHistory { bundle, history } => {
-            super::shared_history::apply(conn, device_id, bundle, history.as_ref(), cs)
-        }
+        WriterMsg::SharedHistory { bundle, history } => super::shared_history::apply(
+            conn,
+            device_id,
+            bundle,
+            history.as_ref(),
+            preserve_revoked,
+            cs,
+        ),
         WriterMsg::ReconcileAll => {
             crate::store::message_identity::reconcile_all(conn, device_id, cs)?;
             crate::lid::reconcile_known_chats(conn, device_id, cs)?;
@@ -564,6 +611,7 @@ fn apply_writer_msg(
                 *timestamp_ms,
                 true,
                 false,
+                preserve_revoked,
                 cs,
             )? {
                 cs.chats = true;

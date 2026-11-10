@@ -33,13 +33,14 @@ pub(super) fn apply_event(
     conn: &mut SqliteConnection,
     device_id: i32,
     event: &Event,
+    preserve_revoked: bool,
     cs: &mut ChangeSet,
     deferred: &mut DeferredAcks,
 ) -> QueryResult<()> {
     match event {
         Event::Messages(batch) => {
             for inbound in batch.iter() {
-                apply_inbound(conn, device_id, inbound, cs)?;
+                apply_inbound(conn, device_id, inbound, preserve_revoked, cs)?;
             }
             Ok(())
         }
@@ -97,7 +98,7 @@ pub(super) fn apply_event(
             cs.message_chats.insert(chat);
             Ok(())
         }
-        Event::HistorySync(lazy) => apply_history_sync(conn, device_id, lazy, cs),
+        Event::HistorySync(lazy) => apply_history_sync(conn, device_id, lazy, preserve_revoked, cs),
         Event::ContactUpdate(update) => {
             clear_contact_removal_tombstones(conn, device_id, &update.jid.to_string())?;
             upsert_contact_names(

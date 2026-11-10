@@ -36,6 +36,7 @@ mod mentions;
 mod message_status;
 mod plugin;
 mod presence;
+mod privacy;
 mod quoted;
 mod rich_text;
 mod status;
@@ -72,6 +73,7 @@ pub use plugin::{PluginAction, PluginNode, PluginRoot, PluginSlot, PluginSurface
 pub use presence::{
     Availability, ChatTyping, ComposingKind, PresenceRegistry, TypingSummary, Typist,
 };
+pub use privacy::{MAX_SAFETY_DELAY_SECS, PrivacyPolicy};
 pub use quoted::{QuotedKind, QuotedMessage};
 pub use rich_text::{
     Emphasis, RichText, Span as TextSpan, parse as parse_rich_text,

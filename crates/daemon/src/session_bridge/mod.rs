@@ -319,6 +319,9 @@ pub async fn run(
     let stores_for_reset = Arc::clone(&stores);
     let mut client = WhatsAppClient::new_for_account_with_registry(account_id, stores)
         .context("opening the local store")?;
+    let initial_privacy = crate::privacy::load(account_id);
+    hub.set_privacy(initial_privacy);
+    client.set_preserve_deleted_messages(initial_privacy.preserve_deleted_messages);
     call_devices::load_preferences().await;
     let avatar_recorder = client.avatar_recorder();
     let mut events = client
@@ -587,6 +590,7 @@ pub async fn finish_forget(
     // just as much this account's data. Everything, staged uploads included:
     // the account is going, and so is anything that was going to be sent under
     // it.
+    crate::privacy::forget(account_id);
     if let Err(e) =
         crate::media::AccountMedia::new(hub.account_id()).wipe(crate::media::Wipe::Everything)
     {

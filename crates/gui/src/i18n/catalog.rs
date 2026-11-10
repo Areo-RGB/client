@@ -387,4 +387,21 @@ catalog! {
     OutgoingCalling => ("calling", "chamando");
     OutgoingRinging => ("ringing", "tocando");
     OutgoingConnected => ("connected", "conectada");
+    Incognito => ("INCOGNITO", "MODO INCOGNITO");
+    IncognitoGuidance => ("Control when read receipts and presence leave this device, and keep messages that the sender deletes for everyone.", "Controle quando confirmações de leitura e presença saem deste dispositivo, e mantenha mensagens apagadas pelo remetente.");
+    BlockReadReceipts => ("Don't send read receipts", "Não enviar confirmações de leitura");
+    BlockReadReceiptsNote => ("Blue ticks and voice-note played receipts stay blocked until you send them manually.", "Confirmações de leitura e de reprodução de áudio ficam bloqueadas até você enviá-las manualmente.");
+    SafetyDelay => ("SAFETY DELAY", "ATRASO DE SEGURANÇA");
+    SafetyDelayOff => ("Off (manual only)", "Desativado (apenas manual)");
+    SafetyDelayNote => ("Automatically send read receipts after the open chat stays visible for this long. Set to 0 to keep receipts manual.", "Envia confirmações de leitura automaticamente após a conversa permanecer aberta por este tempo. Use 0 para manter manual.");
+    AutoReceiptOnReply => ("Send read receipts when replying", "Enviar confirmação ao responder");
+    BlockPresenceUpdates => ("Don't send online status", "Não enviar status online");
+    BlockTypingUpdates => ("Don't send typing or recording indicators", "Não enviar indicadores de digitação ou gravação");
+    PreserveDeletedMessages => ("Keep deleted messages", "Manter mensagens apagadas");
+    PreserveDeletedMessagesNote => ("Messages deleted for everyone by the sender stay readable in the conversation with a deleted badge.", "Mensagens apagadas para todos pelo remetente continuam legíveis na conversa com um aviso de apagada.");
+    ReadReceiptsBlockedForThisChat => ("Read receipts are blocked for this chat.", "Confirmações de leitura estão bloqueadas nesta conversa.");
+    SendReadReceipts => ("Send read receipts", "Confirmar leitura");
+    KeepUnread => ("Keep unread", "Manter não lida");
+    DeletedBadge => ("deleted", "apagada");
+    EditedBadge => ("edited", "editada");
 }

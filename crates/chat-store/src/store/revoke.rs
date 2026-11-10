@@ -32,6 +32,7 @@ pub(super) fn apply_revoke(
     ts_ms: i64,
     locally_sent: bool,
     shared: bool,
+    preserve_revoked: bool,
     changes: &mut ChangeSet,
 ) -> QueryResult<bool> {
     use schema::messages::dsl;
@@ -44,6 +45,16 @@ pub(super) fn apply_revoke(
         sender,
         changes,
     )? {
+        if preserve_revoked && !locally_sent {
+            let updated = diesel::update(
+                dsl::messages
+                    .filter(dsl::id.eq(target.id))
+                    .filter(dsl::revoked.eq(false)),
+            )
+            .set(dsl::revoked.eq(true))
+            .execute(conn)?;
+            return Ok(updated > 0);
+        }
         let updated = diesel::update(
             dsl::messages
                 .filter(dsl::id.eq(target.id))

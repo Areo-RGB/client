@@ -514,6 +514,7 @@ struct Shared {
     /// lookup behind it either.
     resolve_chat_names: chat_names::ChatNameResolveSignal,
     history_budget: Arc<ui_queue::HistoryBudget>,
+    preserve_deleted_messages: Arc<portable_atomic::AtomicBool>,
 }
 
 /// Asking the avatar resolver for a pass.
@@ -773,6 +774,7 @@ pub struct WhatsAppClient {
     /// while the process is offline); a live message in an unnamed special
     /// chat asks for just that chat.
     resolve_chat_names: chat_names::ChatNameResolveSignal,
+    preserve_deleted_messages: Arc<portable_atomic::AtomicBool>,
 }
 
 fn live_content_fallback(message: &wa::Message, has_media: bool) -> String {
@@ -837,6 +839,7 @@ impl WhatsAppClient {
             history_budget,
             resolve_avatars,
             resolve_chat_names,
+            preserve_deleted_messages: Arc::new(portable_atomic::AtomicBool::new(false)),
         })
     }
 
@@ -1026,6 +1029,7 @@ impl WhatsAppClient {
         let resolve_avatars = self.resolve_avatars.clone();
         let resolve_chat_names = self.resolve_chat_names.clone();
         let history_budget = self.history_budget.clone();
+        let preserve_deleted_messages = self.preserve_deleted_messages.clone();
         let account_id = self.account_id;
         let stores = Arc::clone(&self.stores);
 
@@ -1042,6 +1046,7 @@ impl WhatsAppClient {
                     resolve_avatars,
                     resolve_chat_names,
                     history_budget,
+                    preserve_deleted_messages,
                 },
             )
             .await;
@@ -1251,6 +1256,7 @@ impl WhatsAppClient {
             resolve_avatars,
             resolve_chat_names,
             history_budget,
+            preserve_deleted_messages,
         } = shared;
         let cold_start = wacore::time::Instant::now();
         // Device store + durable chat history share one SQLite file (one pool,
@@ -1271,6 +1277,7 @@ impl WhatsAppClient {
         let Session {
             chat_store, names, ..
         } = &*live;
+        chat_store.set_preserve_revoked(preserve_deleted_messages.load(Ordering::Relaxed));
 
         // Hydrate the UI from durable history before the network is even up
         // (bot.run() is what connects). The client is needed here so hydrated
@@ -3203,6 +3210,24 @@ impl WhatsAppClient {
     /// this the new arrival would sit empty until the next message arrived.
     pub fn reload_history(&self) {
         self.reload.notify_one();
+    }
+
+    /// Configure whether remotely revoked messages retain their original body
+    /// in the local store and remain visible in history reloads.
+    pub fn set_preserve_deleted_messages(&self, preserve: bool) {
+        let previous = self
+            .preserve_deleted_messages
+            .swap(preserve, portable_atomic::Ordering::Relaxed);
+        let session = self.session.clone();
+        let reload = self.reload.clone();
+        self.exec.spawn(async move {
+            if let Some(live) = session.lock().await.clone() {
+                live.chat_store.set_preserve_revoked(preserve);
+                if previous != preserve {
+                    reload.notify_one();
+                }
+            }
+        });
     }
 
     /// A handle for recording avatar descriptors from outside the session.

@@ -529,6 +529,9 @@ impl WhatsAppApp {
         // The bubble shows the quote too, or the sender sees a bare note
         // where the recipient sees a reply.
         msg.quoted = quoted;
+        if self.privacy.block_read_receipts && self.privacy.auto_receipt_on_reply {
+            self.confirm_chat_read_in(jid, cx);
+        }
 
         // Following the note down is only what the sender expects if they are
         // looking at where it landed. There is one timeline, so a note that

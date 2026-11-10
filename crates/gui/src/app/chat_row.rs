@@ -267,7 +267,7 @@ fn prefix_for(chat: &Chat, last: &ChatMessage) -> Option<String> {
 
 /// The preview text: a caption if there is one, otherwise the media's name.
 fn body_for(last: &ChatMessage) -> String {
-    if last.revoked {
+    if last.revoked && !last.has_preserved_content() {
         return crate::tr!(MessageDeleted).to_owned();
     }
     // A row nobody typed still happened, and a call is exactly the thing a

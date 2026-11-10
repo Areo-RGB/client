@@ -209,6 +209,18 @@ impl ChatMessage {
         self.business = None;
     }
 
+    /// Whether this message was revoked by the sender yet still carries its
+    /// preserved original payload (text, media, poll, or business card) rather
+    /// than a bare `"[Message deleted]"` tombstone.
+    #[must_use]
+    pub fn has_preserved_content(&self) -> bool {
+        self.revoked
+            && ((!self.content.is_empty() && self.content != "[Message deleted]")
+                || self.media.is_some()
+                || self.poll.is_some()
+                || self.business.is_some())
+    }
+
     /// What sending this again would put on the wire, if anything.
     ///
     /// One question with one answer, asked by the bubble to decide whether to

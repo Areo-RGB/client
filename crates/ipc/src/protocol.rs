@@ -2,7 +2,8 @@
 
 use oxidezap_core::{
     AccountId, CallState, CallVideoFrame, Chat, ChatMessage, DownloadableMedia, GroupHierarchy,
-    GroupRoster, LogLevel, OutgoingMedia, PluginAction, PluginSurface, QuotedMessage, UiEvent,
+    GroupRoster, LogLevel, OutgoingMedia, PluginAction, PluginSurface, PrivacyPolicy,
+    QuotedMessage, UiEvent,
 };
 use serde::{Deserialize, Serialize};
 
@@ -249,6 +250,9 @@ pub struct StateSnapshot {
     /// snapshot unchanged.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub plugins: Vec<PluginSurface>,
+    /// Per-account privacy and incognito enforcement policy.
+    #[serde(default)]
+    pub privacy: PrivacyPolicy,
 }
 
 /// The account this device is linked to.
@@ -359,6 +363,8 @@ pub enum DaemonEvent {
     PluginsChanged {
         plugins: Vec<PluginSurface>,
     },
+    /// The account's privacy policy changed.
+    PrivacyChanged(PrivacyPolicy),
 }
 
 /// Which daemon plane a frontend connection belongs to.
@@ -869,6 +875,10 @@ pub struct MarkRead {
     /// The preview the requester holds for this chat, by id. See
     /// [`ClientRequest::MarkRead`], which is where the checking is explained.
     pub through_message_id: Option<String>,
+    /// Explicitly confirm and send read receipts even when automatic read
+    /// receipts are blocked by the account's [`PrivacyPolicy`].
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub force: bool,
 }
 
 /// A successful audio playback observed by a front end. Routing and media
@@ -1272,6 +1282,10 @@ pub enum ClientRequest {
     Shutdown,
     /// Demand avatar profile pictures for visible rows and overscan.
     EnsureAvatars(EnsureAvatars),
+    /// Update the account's privacy and incognito enforcement policy.
+    SetPrivacyPolicy {
+        policy: PrivacyPolicy,
+    },
 }
 
 /// Correlates a request with the answer it gets back.
@@ -1588,6 +1602,7 @@ mod tests {
             calls: CallState::default(),
             account: None,
             plugins: Vec::new(),
+            privacy: PrivacyPolicy::default(),
         };
 
         assert_eq!(snapshot.total_unread(), 2);
@@ -1652,6 +1667,7 @@ mod tests {
             DaemonEvent::PluginsChanged {
                 plugins: vec![surface],
             },
+            DaemonEvent::PrivacyChanged(PrivacyPolicy::default()),
         ];
 
         // And the exhaustiveness, so a variant added later cannot skip this.
@@ -1662,7 +1678,8 @@ mod tests {
                 | DaemonEvent::ChatRemoved { .. }
                 | DaemonEvent::CallsChanged(_)
                 | DaemonEvent::AccountChanged(_)
-                | DaemonEvent::PluginsChanged { .. } => {}
+                | DaemonEvent::PluginsChanged { .. }
+                | DaemonEvent::PrivacyChanged(_) => {}
             }
         }
 
@@ -1771,6 +1788,7 @@ mod tests {
             calls: CallState::default(),
             account: None,
             plugins: Vec::new(),
+            privacy: PrivacyPolicy::default(),
         };
         assert_eq!(snapshot.total_unread(), u32::MAX);
     }
@@ -1799,6 +1817,7 @@ mod tests {
             calls: CallState::default(),
             account: None,
             plugins: Vec::new(),
+            privacy: PrivacyPolicy::default(),
         };
         assert_eq!(
             snapshot.total_unread(),
@@ -1846,6 +1865,7 @@ mod tests {
             request: ClientRequest::MarkRead(MarkRead {
                 jid: "1@s.whatsapp.net".into(),
                 through_message_id: Some("3EB0".into()),
+                force: false,
             }),
         })
         .unwrap();
@@ -2093,6 +2113,7 @@ mod tests {
                 ClientRequest::MarkRead(MarkRead {
                     jid: "559900000001@s.whatsapp.net".into(),
                     through_message_id: Some("3EB0".into()),
+                    force: false,
                 }),
                 r#"{"request":"mark_read","jid":"559900000001@s.whatsapp.net","through_message_id":"3EB0"}"#.to_string(),
             ),

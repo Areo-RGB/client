@@ -205,7 +205,8 @@ impl WhatsAppApp {
                     // same reason: a reload while the reader is in Status
                     // would otherwise clear the badge of a conversation nobody
                     // was looking at.
-                    if self.window_focused
+                    if !self.privacy.block_read_receipts
+                        && self.window_focused
                         && crate::platform::application_is_active()
                         && self.visible_chat.as_deref() == Some(jid.as_str())
                     {
@@ -214,7 +215,8 @@ impl WhatsAppApp {
                     // The read a row without messages could not bound. Spent
                     // here because this is what gave it a message to name; see
                     // `owed_reads`.
-                    if self.window_focused
+                    if !self.privacy.block_read_receipts
+                        && self.window_focused
                         && crate::platform::application_is_active()
                         && self.visible_chat.as_deref() == Some(jid.as_str())
                         && self.owed_reads.contains(&jid)

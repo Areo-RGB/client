@@ -84,7 +84,8 @@ use std::sync::{Arc, Mutex};
 
 use log::error;
 use oxidezap_core::{
-    AccountId, CallState, Chat, ChatMessage, DownloadableMedia, QuotedMessage, UiEvent,
+    AccountId, CallState, Chat, ChatMessage, DownloadableMedia, PrivacyPolicy, QuotedMessage,
+    UiEvent,
 };
 use oxidezap_ipc::{CallAction, ClientRequest, Link, PageCursor, Request, RequestId};
 // The payload structs the protocol declares, named rather than glob-imported
@@ -146,6 +147,8 @@ pub enum FromDaemon {
     Calls(Box<CallState>),
     /// Who this device is linked as, at the moment this client attached.
     Account(Option<oxidezap_ipc::AccountIdentity>),
+    /// The account's active privacy policy.
+    Privacy(PrivacyPolicy),
     /// A profile picture is ready in the daemon media cache.
     Avatar { jid: String, key: String },
     /// A local cache read completed. It cannot change the selected picture.
@@ -1373,7 +1376,23 @@ impl SessionHandle {
         self.tell(ClientRequest::MarkRead(MarkRead {
             jid: jid.to_string(),
             through_message_id,
+            force: false,
         }));
+    }
+
+    /// Explicitly mark a chat read and send outgoing read receipts even when
+    /// the privacy policy blocks automatic read receipts.
+    pub fn mark_chat_read_forced(&self, jid: &str, through_message_id: Option<String>) {
+        self.tell(ClientRequest::MarkRead(MarkRead {
+            jid: jid.to_string(),
+            through_message_id,
+            force: true,
+        }));
+    }
+
+    /// Update the account's privacy policy in the daemon.
+    pub fn set_privacy_policy(&self, policy: PrivacyPolicy) {
+        self.tell(ClientRequest::SetPrivacyPolicy { policy });
     }
 
     /// Vote on a poll by option index.

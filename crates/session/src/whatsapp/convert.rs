@@ -19,9 +19,18 @@ use crate::quoting::quoted_from;
 /// Hydrate an oldest-first page, assigning unread slots only to incoming
 /// rows that contributed to the durable counter. Local revoke placeholders
 /// stay read and cannot displace a real unread message or its receipt.
+#[cfg(test)]
 pub(super) fn stored_with_unread_tail(
     rows: Vec<oxidezap_chat_store::StoredMessage>,
     unread: u32,
+) -> Vec<ChatMessage> {
+    stored_with_unread_tail_with_policy(rows, unread, false)
+}
+
+pub(super) fn stored_with_unread_tail_with_policy(
+    rows: Vec<oxidezap_chat_store::StoredMessage>,
+    unread: u32,
+    preserve_revoked: bool,
 ) -> Vec<ChatMessage> {
     let mut remaining = unread;
     let mut messages: Vec<_> = rows
@@ -33,7 +42,7 @@ pub(super) fn stored_with_unread_tail(
                 && !row.received_as_shared_history
                 && row.kind != oxidezap_chat_store::MessageKind::HistoryNotice
                 && row.kind != oxidezap_chat_store::MessageKind::GroupMembership;
-            let mut message = stored_to_chat_message(row);
+            let mut message = stored_to_chat_message_with_policy(row, preserve_revoked);
             if eligible && remaining > 0 {
                 message.is_read = false;
                 remaining -= 1;
@@ -47,11 +56,23 @@ pub(super) fn stored_with_unread_tail(
 
 /// Convert a durable store row into the UI message model. Media stays
 /// download-on-demand (the encoded proto lives in the store if needed later).
+#[cfg(test)]
 pub(super) fn stored_to_chat_message(stored: oxidezap_chat_store::StoredMessage) -> ChatMessage {
+    stored_to_chat_message_with_policy(stored, false)
+}
+
+pub(super) fn stored_to_chat_message_with_policy(
+    stored: oxidezap_chat_store::StoredMessage,
+    preserve_revoked: bool,
+) -> ChatMessage {
+    let keep_revoked_payload = stored.revoked
+        && preserve_revoked
+        && !stored.local_revoke_placeholder
+        && (stored.text.is_some() || stored.message.is_some());
     // The stored proto still carries the media envelope: hydrate thumbnails +
     // download info so historical media renders and stays fetchable, instead
     // of degrading to a [kind] text row until a live redelivery.
-    let base_message = (!stored.revoked)
+    let base_message = (!stored.revoked || keep_revoked_payload)
         .then_some(stored.message.as_deref())
         .flatten()
         .map(oxidezap_chat_store::normalized_message);
@@ -60,7 +81,7 @@ pub(super) fn stored_to_chat_message(stored: oxidezap_chat_store::StoredMessage)
     let business = base_message.and_then(oxidezap_chat_store::business_content);
     let contacts = base_message.and_then(oxidezap_chat_store::shared_contacts_text);
     let pack = base_message.and_then(oxidezap_chat_store::sticker_pack_text);
-    let content = match (&stored.text, stored.revoked) {
+    let content = match (&stored.text, stored.revoked && !keep_revoked_payload) {
         (_, true) => "[Message deleted]".to_string(),
         (_, _) if business.is_some() => business
             .as_ref()
@@ -609,6 +630,11 @@ mod business_tests {
                 .and_then(oxidezap_chat_store::business_content)
         );
         stored.revoked = true;
+        let preserved = stored_to_chat_message_with_policy(stored.clone(), true);
+        assert!(preserved.revoked);
+        assert_eq!(preserved.content, "*Delivery* is ready");
+        assert!(preserved.has_preserved_content());
+
         let revoked = stored_to_chat_message(stored);
         assert!(revoked.business.is_none());
         assert!(revoked.media.is_none());

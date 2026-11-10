@@ -27,6 +27,7 @@ pub mod media;
 /// library: which plugins there are — and, on the web, why there are none —
 /// is a fact about the daemon rather than about the process around it.
 pub mod plugins;
+pub mod privacy;
 mod publisher;
 pub mod server;
 pub mod session_bridge;

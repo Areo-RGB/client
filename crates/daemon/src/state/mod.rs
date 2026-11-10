@@ -229,6 +229,23 @@ impl StateHub {
         self.apply(Change::live(DaemonEvent::PluginsChanged { plugins }));
     }
 
+    /// The privacy policy currently held for this account.
+    #[must_use]
+    pub fn privacy(&self) -> oxidezap_core::PrivacyPolicy {
+        self.state.privacy()
+    }
+
+    /// Record a new privacy policy for this account and tell everyone if it
+    /// changed.
+    pub fn set_privacy(&self, policy: oxidezap_core::PrivacyPolicy) -> bool {
+        let policy = policy.normalized();
+        if self.state.privacy() == policy {
+            return false;
+        }
+        self.apply(Change::live(DaemonEvent::PrivacyChanged(policy)));
+        true
+    }
+
     /// Change what is happening on the call front, and tell everyone.
     ///
     /// The transitions live in [`oxidezap_core::CallState`], so the daemon and
