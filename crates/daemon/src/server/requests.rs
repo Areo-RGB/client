@@ -147,7 +147,11 @@ pub(super) async fn handle_request(
             acted(dispatch(hub, commands, Action::SendReaction(*request)).await)
         }
         ClientRequest::Typing(request) => {
-            acted(dispatch(hub, commands, Action::Typing(request)).await)
+            if hub.privacy().block_typing_updates && request.composing {
+                acted(Ok(()))
+            } else {
+                acted(dispatch(hub, commands, Action::Typing(request)).await)
+            }
         }
         ClientRequest::VotePoll(request) => {
             acted(dispatch(hub, commands, Action::VotePoll(request)).await)
@@ -258,10 +262,18 @@ pub(super) async fn handle_request(
             .await,
         ),
         ClientRequest::MarkRead(request) => {
-            acted(dispatch(hub, commands, Action::MarkRead(request)).await)
+            if hub.privacy().block_read_receipts && !request.force {
+                acted(Ok(()))
+            } else {
+                acted(dispatch(hub, commands, Action::MarkRead(request)).await)
+            }
         }
         ClientRequest::MarkAudioPlayed(request) => {
-            acted(dispatch(hub, commands, Action::MarkAudioPlayed(request)).await)
+            if hub.privacy().block_read_receipts {
+                acted(Ok(()))
+            } else {
+                acted(dispatch(hub, commands, Action::MarkAudioPlayed(request)).await)
+            }
         }
         ClientRequest::MarkStatusWatched(request) => {
             acted(dispatch(hub, commands, Action::MarkStatusWatched(request)).await)
